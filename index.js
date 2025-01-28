@@ -8,10 +8,10 @@ export default function Terminal() {
 
   const API_URL = "YOUR-API-URL"; // Ensure this matches your backend
 
-  const personalities = [
+  const PERSONALITIES = [
     "hacker", "scientist", "philosopher", "comedian", "wizard", "robot",
-    "pirate", "detective", "superhero", "villain", "gamer", "alien", "crypto enthusiast"
-  ];
+    "pirate", "detective", "superhero", "villain", "crypto enthusiast"
+];
 
   useEffect(() => {
     // Blinking cursor effect
