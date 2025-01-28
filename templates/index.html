@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <title>$DP</title>  <!-- Updated name -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="terminal">
+        <h2>🟢 $DP Terminal</h2>  <!-- Updated name -->
+        <p>Select a Personality:</p>
+
+        <select id="personality">
+            <option value="">Choose a Personality</option>
+        </select>
+        
+        <button onclick="setPersonality()">Set Personality</button>
+
+        <div id="messages"></div>
+
+        <input type="text" id="userInput" class="blinking-cursor" placeholder="Type your message..." onkeydown="if(event.key==='Enter') sendMessage()">
+
+    </div>
+
+    <script>
+        let selectedPersonality = "";
+
+        // Load personality list dynamically
+        const PERSONALITIES = [
+            "hacker", "scientist", "philosopher", "comedian", "wizard", "robot",
+            "pirate", "detective", "superhero", "villain", "crypto enthusiast"
+        ];
+
+        const personalityDropdown = document.getElementById("personality");
+        PERSONALITIES.forEach(personality => {
+            const option = document.createElement("option");
+            option.value = personality;
+            option.textContent = personality.charAt(0).toUpperCase() + personality.slice(1);
+            personalityDropdown.appendChild(option);
+        });
+
+        function setPersonality() {
+            selectedPersonality = document.getElementById("personality").value;
+            if (!selectedPersonality) {
+                alert("⚠️ Please select a personality first!");
+                return;
+            }
+
+            fetch("/set_personality", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({ personality: selectedPersonality }),
+            }).then(response => response.json())
+            .then(data => {
+                document.getElementById("messages").innerHTML += `<p class="system">🎭 ${data.message}</p>`;
+            }).catch(err => console.error("Error setting personality:", err));
+        }
+
+        function sendMessage() {
+            const inputField = document.getElementById("userInput");
+            const message = inputField.value.trim();
+            if (!message) return;
+
+            document.getElementById("messages").innerHTML += `<p class="user">User: ${message}</p>`;
+            inputField.value = "";
+
+            fetch("/chat", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({ message }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                let botMessage = `<p class="dp">$DP: ${data.response}</p>`;
+                if (data.image) {
+                    botMessage += `<br><img src="${data.image}" alt="Generated Image" class="bot-image">`;
+                }
+                document.getElementById("messages").innerHTML += botMessage;
+                document.getElementById("messages").scrollTop = document.getElementById("messages").scrollHeight;
+            })
+            .catch(err => console.error("Chat Error:", err));
+        }
+    </script>
+</body>
+</html>
