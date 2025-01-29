@@ -6,15 +6,13 @@ from flask_cors import CORS
 from flask import send_from_directory
 from dotenv import load_dotenv
 import openai
-
+from datetime import datetime
 
 # Load environment variables
 load_dotenv()
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 FLASK_SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "fallback_secret_if_env_fails")
-
-
 
 # Validate API keys
 if not DEEPSEEK_API_KEY:
@@ -31,11 +29,12 @@ CORS(app, supports_credentials=True)
 openai.api_key = OPENAI_API_KEY
 
 # Constants
-DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
+DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"  # Updated endpoint
 WALLET_ADDRESS = "7CSW7ofgjD8ThrWsNAzTKKYtyqe3QSibsUYcCPFV1AFG"
 IMAGE_TRIGGERS = ["generate image", "create picture", "show me a"]
+CRYPTO_IDS = {"bitcoin": "BTC", "ethereum": "ETH", "solana": "SOL"}
+COINGECKO_URL = "https://api.coingecko.com/api/v3/simple/price"
 
-# Personality Configurations
 # Personality Configurations (Now fully matched with front-end)
 PERSONALITIES = {
     "hacker": {
@@ -96,79 +95,6 @@ PERSONALITIES = {
     }
 }
 
-
-# Image Generation Function
-def generate_image(prompt: str) -> str:
-    """Generate image using DALL-E 3"""
-    try:
-        response = openai.Image.create(
-            model="dall-e-3",
-            prompt=f"Professional digital art of {prompt}. Trending crypto-art style, vibrant colors, 8K resolution.",
-            n=1,
-            size="1024x1024",
-            quality="hd"
-        )
-        return response['data'][0]['url']
-    except Exception as e:
-        print(f"⚠️ Image error: {str(e)}")
-        return None
-
-# DeepSeek R1 API Call
-def call_deepseek_r1(prompt: str, personality: str) -> dict:
-    """Fix DeepSeek API Call with working model"""
-    
-    # Check for wallet-related questions
-    wallet_keywords = ["wallet", "address", "ca", "contract address"]
-    if any(kw in prompt.lower() for kw in wallet_keywords):
-        return {
-            "text": PERSONALITIES.get(personality, PERSONALITIES["default"])["wallet_response"],
-            "image": None
-        }
-
-    headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    personality_config = PERSONALITIES.get(personality, PERSONALITIES["default"])
-    
-    payload = {
-        "model": "deepseek-chat",  # Using deepseek-chat instead of deepseek-r1
-        "messages": [
-            {"role": "system", "content": personality_config["system_prompt"]},
-            {"role": "user", "content": prompt},
-        ],
-        "temperature": 0.7,
-        "max_tokens": 1000,
-        "stream": False
-    }
-
-    try:
-        response = requests.post(DEEPSEEK_API_URL, json=payload, headers=headers, timeout=15)
-        response.raise_for_status()
-        
-        return {
-            "text": response.json()["choices"][0]["message"]["content"],
-            "image": None  # Image generation stays the same
-        }
-        
-    except requests.exceptions.HTTPError as e:
-        print(f"🔴 DeepSeek HTTP Error: {response.status_code} - {response.text}")
-        return {"text": f"⚠️ API error {response.status_code}: {response.text}", "image": None}
-
-    except requests.exceptions.RequestException as e:
-        print(f"🔴 API Request Failed: {str(e)}")
-        return {"text": "⚠️ System overload - try again later!", "image": None}
-    
-@app.before_request
-def force_https():
-    if not request.is_secure:
-        return redirect(request.url.replace("http://", "https://"), code=301)    
-    
-@app.route('/favicon.ico')
-def favicon():
-    return send_from_directory(os.path.join(app.root_path, 'static'), 'favicon.ico', mimetype='image/vnd.microsoft.icon')
-
 # Routes
 @app.route("/")
 def home():
@@ -193,16 +119,207 @@ def set_personality():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# Image Generation Function
+def generate_image(prompt: str) -> str:
+    """Generate image using DALL-E 3"""
+    try:
+        response = openai.Image.create(
+            
+            model="dall-e-3",
+            prompt=f"Professional digital art of {prompt}. Trending crypto-art style, vibrant colors, 8K resolution.",
+            n=1,
+            size="1024x1024",
+            quality="hd",
+            request_timeout=15
+            
+        )
+        
+        return response['data'][0]['url']
+    except Exception as e:
+        print(f"⚠️ Image error: {str(e)}")
+        return None
+
+def get_crypto_prices():
+    try:
+        print(f"🔄 Fetching prices for: {list(CRYPTO_IDS.keys())}")
+        params = {
+            "ids": ",".join(CRYPTO_IDS.keys()),
+            "vs_currencies": "usd",
+            "include_last_updated_at": True
+        }
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept-Encoding": "gzip"
+            }
+        
+        response = requests.get(COINGECKO_URL, headers=headers, params=params, timeout=10)
+        response.raise_for_status()
+        print(f"✅ CoinGecko response: {response.status_code}")
+        
+        prices = {}
+        data = response.json()
+        print(f"📄 Raw API data: {data}")  # Debug raw response
+        
+        for crypto, symbol in CRYPTO_IDS.items():
+            if crypto in data:
+                prices[symbol] = {
+                    "price": f"${data[crypto]['usd']:,.2f}",
+                    "updated": datetime.fromtimestamp(data[crypto]["last_updated_at"]).strftime("%Y-%m-%d %H:%M UTC")
+                }
+        print(f"📊 Processed prices: {prices}")
+        return prices
+    
+    except Exception as e:
+        print(f"⚠️ Crypto price error: {str(e)}")
+        return None
+
+# Updated DeepSeek v2 API Call
+def call_deepseek_v2(prompt: str, personality: str) -> dict:
+    """Handle DeepSeek API calls with enhanced error handling"""
+    prompt_lower = prompt.lower()
+    
+    # 1. Price Check
+    price_keywords = [
+        "price of", "current price", "how much is", "value of",
+        "rate of", "price for", "cost of", "btc price", "eth price",
+        "sol price", "bitcoin value", "ethereum value", "solana value",
+        "market value", "crypto rate", "coin price", "how's crypto",
+        "price check", "valuation"
+    ]
+    
+    if any(kw in prompt_lower for kw in price_keywords):
+        print(f"💰 Price query detected: {prompt}")
+        prices = get_crypto_prices()
+        
+        if prices:
+            # Format response and ensure immediate return
+            response_text = format_price_response(prompt_lower, prices)
+            print(f"✅ Returning price response: {response_text}")
+            return {"text": response_text, "image": None}
+        else:
+            print("⚠️ Price check failed, proceeding to normal flow")
+
+    # 2. Wallet Check
+    wallet_keywords = ["wallet", "address", "ca", "contract address"]
+    if any(kw in prompt_lower for kw in wallet_keywords):
+        print(f"🔑 Wallet query detected: {prompt}")
+        return {
+            "text": PERSONALITIES.get(personality, PERSONALITIES["default"])["wallet_response"],
+            "image": None
+        }
+
+    # 3. DeepSeek API Call
+    print(f"🤖 Proceeding to DeepSeek API call for: {prompt}")
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json",
+        "Accept": "application/vnd.deepseek.v2+json"
+    }
+
+    personality_config = PERSONALITIES.get(personality, PERSONALITIES["default"])
+    
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": personality_config["system_prompt"]},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.7,
+        "max_tokens": 1000,
+        "stream": False
+    }
+
+    try:
+        print(f"🚀 Sending request to DeepSeek: {payload}")
+        response = requests.post(DEEPSEEK_API_URL, json=payload, headers=headers, timeout=15)
+        response.raise_for_status()
+        response_data = response.json()
+        print(f"✅ DeepSeek response: {response_data}")
+        
+        return {
+            "text": response_data["choices"][0]["message"]["content"],
+            "image": None
+        }
+        
+    except requests.exceptions.HTTPError as e:
+        print(f"🔴 DeepSeek HTTP Error: {response.status_code} - {response.text}")
+        return {"text": "⚠️ Temporary system issue - please try again!", "image": None}
+    except requests.exceptions.RequestException as e:
+        print(f"🔴 Network Error: {str(e)}")
+        return {"text": "⚠️ Connection failed - check your network!", "image": None}
+    except KeyError as e:
+        print(f"🔴 Response Format Error: Missing {str(e)} in API response")
+        return {"text": "⚠️ Unexpected response format from API", "image": None}
+
+def format_price_response(prompt: str, prices: dict) -> str:
+    """Format cryptocurrency price response with proper symbols"""
+    crypto_map = {
+        "bitcoin": ("₿ Bitcoin", "BTC"),
+        "btc": ("₿ Bitcoin", "BTC"),
+        "ethereum": ("Ξ Ethereum", "ETH"),
+        "eth": ("Ξ Ethereum", "ETH"),
+        "solana": ("◎ Solana", "SOL"),
+        "sol": ("◎ Solana", "SOL")
+    }
+    
+    for term, (name, symbol) in crypto_map.items():
+        if term in prompt:
+            return f"{name} price: {prices[symbol]['price']}\n(Updated: {prices[symbol]['updated']})"
+    
+    # General price response
+    update_times = {v['updated'] for v in prices.values()}
+    price_list = "\n".join([f"{name}: {data['price']}" for name, data in prices.items()])
+    time_note = f"\n(Updated: {next(iter(update_times))})" if len(update_times) == 1 else "\n(Update times vary per crypto)"
+    
+    return f"📊 Current crypto prices:\n{price_list}{time_note}"
+
+@app.route("/test_prices")
+def test_prices():
+    """Test endpoint for price checks"""
+    test_queries = [
+        "What's the price of Bitcoin?",
+        "How much is Ethereum worth?",
+        "Current SOL price",
+        "Show me crypto prices",
+        "What's the value of my Bitcoin holdings?"
+    ]
+    
+    results = []
+    for query in test_queries:
+        result = call_deepseek_v2(query, "crypto enthusiast")
+        results.append({
+            "query": query,
+            "response": result["text"],
+            "image": result["image"]
+        })
+    
+    return jsonify(results)    
+
+@app.before_request
+def force_https():
+    if not request.is_secure:
+        return redirect(request.url.replace("http://", "https://"), code=301)    
+    
+@app.route('/favicon.ico')
+def favicon():
+    return send_from_directory(os.path.join(app.root_path, 'static'), 'favicon.ico', mimetype='image/vnd.microsoft.icon')
+
+# Update route handler
 @app.route("/chat", methods=["POST"])
 def chat():
-    """Handle chat requests"""
     try:
         data = request.get_json()
         if not data or "message" not in data:
             return jsonify({"error": "No message"}), 400
-            
+        
         personality = session.get("personality", "default")
-        result = call_deepseek_r1(data["message"], personality)
+        result = call_deepseek_v2(data["message"], personality)  # Updated function name
+        
+        # Add image generation check
+        if any(trigger in data["message"].lower() for trigger in IMAGE_TRIGGERS):
+            image_url = generate_image(data["message"])
+            result["image"] = image_url
         
         return jsonify({
             "response": result["text"],
@@ -212,6 +329,6 @@ def chat():
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
+    
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)  # Ensure debug is False
