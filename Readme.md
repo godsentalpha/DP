@@ -15,7 +15,7 @@ An **interactive AI Terminal** powered by **DeepSeekR1** and **OpenAI API**, off
 
 ---
 
-## **🛠 Installation Guide**
+## **🛠 $DP Installation Guide**
 
 ### **1️⃣ Clone the Repository**
 ```bash

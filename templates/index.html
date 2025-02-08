@@ -156,7 +156,7 @@
             document.getElementById("messages").innerHTML += `<p class="user">User: ${message}</p>`;
             inputField.value = "";
     
-            // Check if auto-tweet is enabled via the checkbox
+            // Check if auto-tweet is enabled via the checkbox $DP
             const tweetCheckbox = document.getElementById("tweetCheckbox");
             const tweetFlag = tweetCheckbox ? tweetCheckbox.checked : false;
     
@@ -164,7 +164,7 @@
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 credentials: "include",
-                // Pass the tweet flag along with the message
+                // Pass the tweet flag along with the message $DP
                 body: JSON.stringify({ message, tweet: tweetFlag }),
             })
             .then(response => response.json())

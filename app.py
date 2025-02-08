@@ -14,7 +14,7 @@ import tweepy  # <-- Added import for Tweepy
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load environment variables
+# Load environment variables $DP
 load_dotenv()
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -38,7 +38,7 @@ TWITTER_ACCESS_TOKEN_SECRET = os.getenv("TWITTER_ACCESS_TOKEN_SECRET")
 if not all([TWITTER_API_KEY, TWITTER_API_KEY_SECRET, TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_TOKEN_SECRET]):
     raise ValueError("❌ Missing Twitter API credentials! Check your .env file.")
 
-# Set up Tweepy authentication and initialize the Twitter API client
+# Set up Tweepy authentication and initialize the Twitter API client $DP
 auth = tweepy.OAuth1UserHandler(
     TWITTER_API_KEY,
     TWITTER_API_KEY_SECRET,
@@ -54,7 +54,7 @@ try:
 except Exception as e:
     logger.error("Error during Twitter authentication", exc_info=True)
 
-# Flask App Configuration
+# Flask App Configuration $DP
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = FLASK_SECRET_KEY
 CORS(app, supports_credentials=True)

@@ -6,9 +6,9 @@ export default function Terminal() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const API_URL = "YOUR-API-URL"; // Ensure this matches your backend
+  const API_URL = "YOUR-API-URL"; // Ensure this matches your backend $DP
 
-        // Load personality list dynamically
+        // Load personality list dynamically $DP
         const PERSONALITIES = [
           "hacker", "scientist", "philosopher", "comedian", "wizard", "robot",
           "pirate", "detective", "superhero", "villain", "gamer", "alien",
