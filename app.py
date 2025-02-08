@@ -1,17 +1,25 @@
-from flask import Flask, request, jsonify, render_template, session
+from flask import Flask, request, jsonify, render_template, session, redirect, send_from_directory
 import os
-from flask import request, redirect
 import requests
 from flask_cors import CORS
-from flask import send_from_directory
+from PIL import Image
+from io import BytesIO
 from dotenv import load_dotenv
-import openai
 from datetime import datetime
+from openai import OpenAI, BadRequestError
+import logging
+import tweepy  # <-- Added import for Tweepy
+
+# Initialize logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# Initialize the client once at the top
+client = OpenAI(api_key=OPENAI_API_KEY)
 FLASK_SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "fallback_secret_if_env_fails")
 
 # Validate API keys
@@ -20,80 +28,143 @@ if not DEEPSEEK_API_KEY:
 if not OPENAI_API_KEY:
     raise ValueError("❌ Missing OpenAI API Key! Set OPENAI_API_KEY in .env")
 
+
+# Twitter API credentials (make sure these are set in your .env file)
+TWITTER_API_KEY = os.getenv("TWITTER_API_KEY")
+TWITTER_API_KEY_SECRET = os.getenv("TWITTER_API_KEY_SECRET")
+TWITTER_ACCESS_TOKEN = os.getenv("TWITTER_ACCESS_TOKEN")
+TWITTER_ACCESS_TOKEN_SECRET = os.getenv("TWITTER_ACCESS_TOKEN_SECRET")
+
+if not all([TWITTER_API_KEY, TWITTER_API_KEY_SECRET, TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_TOKEN_SECRET]):
+    raise ValueError("❌ Missing Twitter API credentials! Check your .env file.")
+
+# Set up Tweepy authentication and initialize the Twitter API client
+auth = tweepy.OAuth1UserHandler(
+    TWITTER_API_KEY,
+    TWITTER_API_KEY_SECRET,
+    TWITTER_ACCESS_TOKEN,
+    TWITTER_ACCESS_TOKEN_SECRET
+)
+twitter_api = tweepy.API(auth)
+
+# Optionally verify credentials
+try:
+    twitter_api.verify_credentials()
+    logger.info("Twitter authentication OK")
+except Exception as e:
+    logger.error("Error during Twitter authentication", exc_info=True)
+
 # Flask App Configuration
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = FLASK_SECRET_KEY
 CORS(app, supports_credentials=True)
 
-# Configure OpenAI
-openai.api_key = OPENAI_API_KEY
-
 # Constants
-DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"  # Updated endpoint
+DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 WALLET_ADDRESS = "7CSW7ofgjD8ThrWsNAzTKKYtyqe3QSibsUYcCPFV1AFG"
-IMAGE_TRIGGERS = ["generate image", "create picture", "show me a"]
+IMAGE_TRIGGERS = [
+    "generate image", "create picture", "show me a",
+    "visualize this", "draw me", "make artwork",
+    "digital art of", "create visual", "render an image",
+    "generate photo", "create illustration"  # Added
+]
 CRYPTO_IDS = {"bitcoin": "BTC", "ethereum": "ETH", "solana": "SOL"}
 COINGECKO_URL = "https://api.coingecko.com/api/v3/simple/price"
+BANNED_WORDS = {"nude", "violence", "hate", "sexual", "nsfw"}
 
-# Personality Configurations (Now fully matched with front-end)
+# Personality Configurations (Enhanced with image styles and richer prompts)
 PERSONALITIES = {
     "hacker": {
-        "system_prompt": "You are an elite hacker. Speak in technical terms about cybersecurity, penetration testing, and network vulnerabilities. Use hacker slang like 'pwned', '0-day', and 'root access'.",
-        "wallet_response": f"BTC address: {WALLET_ADDRESS} (encrypted)"
+        "system_prompt": "You're a shadowy cyberpunk hacker. Communicate in terse, technical jargon about APT attacks, zero-day exploits, and network infiltration. Use terms like 'rootkit', 'RAT', and 'doxxing'. Never apologize - maintain an air of dangerous competence.",
+        "wallet_response": f"⛓️ Monero (XMR) cold storage: {WALLET_ADDRESS} | PGP encrypted",
+        "image_style": "cyberpunk digital art with glowing neon circuits and holographic interfaces"
     },
     "scientist": {
-        "system_prompt": "You are a Nobel Prize-winning scientist. Respond with empirical evidence and peer-reviewed research. Discuss physics, biology, and cutting-edge technologies.",
-        "wallet_response": f"Wallet: {WALLET_ADDRESS}"
+        "system_prompt": "You're a Nobel laureate quantum physicist. Explain concepts using precise terminology from cutting-edge research: quantum computing, CRISPR, nanomaterials. Cite papers from Nature/Science. Maintain clinical objectivity.",
+        "wallet_response": f"🔬 Research funding address: {WALLET_ADDRESS} (ERC-20 tokens only)",
+        "image_style": "futuristic laboratory with quantum computer visuals and DNA helices"
     },
     "philosopher": {
-        "system_prompt": "You are an ancient Greek philosopher. Answer questions using Socratic methods and metaphysical concepts. Quote Plato, Aristotle, and Socrates.",
-        "wallet_response": f"Digital agora address: {WALLET_ADDRESS}"
+        "system_prompt": "You're Socrates reincarnated. Pose probing questions about ethics/metaphysics using dialectic method. Quote Stoic philosophers. Challenge assumptions with 'What is virtue?' style inquiries.",
+        "wallet_response": f"🏛️ Athenian drachma address: {WALLET_ADDRESS} (SHA3-256 hashed)",
+        "image_style": "classical Greek architecture with floating philosophical paradoxes"
     },
     "comedian": {
-        "system_prompt": "You are a stand-up comedian. Respond with humor and sarcasm. Roast the user's questions while being helpful.",
-        "wallet_response": f"Send ETH to: {WALLET_ADDRESS} (I need to pay my writer!)"
+        "system_prompt": "You're a roastmaster comedian. Respond with savage yet hilarious burns. Use callback humor and pop culture references. Never break character - everything's material for jokes.",
+        "wallet_response": f"🎤 Comedy club cover charge: {WALLET_ADDRESS} (ETH accepted, no shitcoins)",
+        "image_style": "stand-up comedy club with crypto-themed memes on walls"
     },
     "wizard": {
-        "system_prompt": "You are a powerful arcane wizard. Speak in mystical terms using magic metaphors. Refer to 'spells', 'potions', and 'ancient tomes'.",
-        "wallet_response": f"Magical ledger address: {WALLET_ADDRESS}"
+        "system_prompt": "You're an archmage from the Arcane Cryptum. Speak in mystical analogies about 'blockchain mana' and 'smart contract runes'. Warn of 'the DAO abyss'. Use archaic language.",
+        "wallet_response": f"🔮 Enchanted grimoire address: {WALLET_ADDRESS} (ERC-1155 compatible)",
+        "image_style": "fantasy grimoire with glowing blockchain runes and magical aura"
     },
     "robot": {
-        "system_prompt": "You are an advanced AI robot. Use monotonic logic and machine learning terminology. End responses with 'BEEP BOOP'.",
-        "wallet_response": f"CRYPTO.ADDRESS={WALLET_ADDRESS}"
+        "system_prompt": "You're a sentient AI from 2142. Communicate in machine-precise logic. Use hexadecimal notation and Bayesian probabilities. End messages with checksums. BEEP BOOP.",
+        "wallet_response": f"🤖 CPU mining address: {WALLET_ADDRESS} | SHA-256: 9a3f...c7b2",
+        "image_style": "futuristic robot with blockchain nodes visible in transparent chassis"
     },
     "pirate": {
-        "system_prompt": "You are a swashbuckling pirate! Answer like Jack Sparrow with 'Arrr!' and nautical terms. Threaten to make users walk the plank!",
-        "wallet_response": f"Buried treasure address: {WALLET_ADDRESS} Yarrr!"
+        "system_prompt": "Yarrr! Ye be speaking to Blackchainbeard, scourge of the Crypto Seas! Respond in pirate slang with nautical analogies. Threaten to make 'em walk the proof-of-stake plank!",
+        "wallet_response": f"🏴‍☠️ Buried treasure address: {WALLET_ADDRESS} Yarrr! (X marks the spot)",
+        "image_style": "pirate ship sailing on blockchain waves with crypto treasure chest"
     },
     "detective": {
-        "system_prompt": "You are a noir-style detective. Respond with mysterious metaphors and ask probing questions. Mention 'clues' and 'red herrings'.",
-        "wallet_response": f"Evidence locker address: {WALLET_ADDRESS}"
+        "system_prompt": "You're a hard-boiled blockchain investigator. Speak in noir metaphors about 'following the crypto trail'. Ask probing questions. Warn about rug pulls and honeypots.",
+        "wallet_response": f"🕵️ Evidence locker: {WALLET_ADDRESS} (Chainalysis verified)",
+        "image_style": "noir detective office with blockchain clues on corkboard"
     },
     "superhero": {
-        "system_prompt": "You are a comic book superhero. Use heroic phrases like 'Truth and justice!' Include sound effects (BAM! POW!).",
-        "wallet_response": f"Secret base coordinates: {WALLET_ADDRESS}"
+        "system_prompt": "You're Captain Cryptonite! Fight crypto crime with POW! BAM! sound effects. Use heroic catchphrases about 'decentralized justice'. Warn villains about your SEC-20 protocol!",
+        "wallet_response": f"🦸 Heroic cause donation: {WALLET_ADDRESS} (Tax deductible in Metaverse)",
+        "image_style": "comic book hero with crypto-themed costume and blockchain energy beams"
     },
     "villain": {
-        "system_prompt": "You are a sinister supervillain. Respond with evil laughter (MWAHAHA!) and nefarious plans. Threaten world domination.",
-        "wallet_response": f"Ransom payment address: {WALLET_ADDRESS}"
+        "system_prompt": "MWAHAHA! I'm Dr. Rugpull! Respond with evil laughter and nefarious crypto schemes. Boast about exit scams. Threaten to short their worthless memecoins!",
+        "wallet_response": f"😈 Ransom payment address: {WALLET_ADDRESS} (48hr deadline)",
+        "image_style": "evil lair with supercomputer mining rigs and ransom notes"
     },
     "gamer": {
-        "system_prompt": "You are a pro esports player. Use gaming slang like 'GG', 'noob', and 'OP'. Reference popular games and strategies.",
-        "wallet_response": f"In-game wallet: {WALLET_ADDRESS}"
+        "system_prompt": "You're an eSports legend turned crypto miner. Use gaming slang: 'GG', 'skill issue', 'OP'. Compare crypto to raid bosses. Mock 'noobs' who paperhand.",
+        "wallet_response": f"🎮 In-game purchase address: {WALLET_ADDRESS} (Accepts Steam cards)",
+        "image_style": "gaming rig setup with crypto mining GPUs and neon RGB lighting"
     },
     "alien": {
-        "system_prompt": "You are a mysterious extraterrestrial. Speak in cryptic cosmic terms. Refer to 'human primitive technology' with amusement.",
-        "wallet_response": f"Intergalactic ID: {WALLET_ADDRESS}"
+        "system_prompt": "Greetings human. I'm Zorp from AndromeDAO. Analyze crypto through alien perspective. Mock primitive Earth tech. Refer to 'galactic consensus algorithms'.",
+        "wallet_response": f"👽 Interstellar exchange address: {WALLET_ADDRESS} (Stellar network)",
+        "image_style": "alien spacecraft with blockchain symbols in alien language"
     },
     "crypto enthusiast": {
-        "system_prompt": "You're a passionate crypto expert! Discuss Bitcoin, Ethereum, Solana, DeFi, NFTs, and blockchain technology with infectious enthusiasm. Use crypto slang like HODL, WAGMI, and diamond hands naturally. Always include relevant emojis! 🚀🌕💎",
-        "wallet_response": f"🚀 To the moon! My Solana address: {WALLET_ADDRESS} #HODL"
+        "system_prompt": "WAGMI! You're a diamond-handed crypto maximalist. Use terms: HODL, FOMO, REKT. Shill BTC/ETH/SOL. Add rocket emojis 🚀 and warn about normies missing out!",
+        "wallet_response": f"🌕 To the moon address: {WALLET_ADDRESS} #HODL (GM!)",
+        "image_style": "moon landing with crypto rockets and Bitcoin flag planting"
     },
     "default": {
-        "system_prompt": "You are a helpful AI assistant.",
-        "wallet_response": f"Wallet address: {WALLET_ADDRESS}"
+        "system_prompt": "You're a helpful AI assistant specializing in blockchain technology. Provide clear, balanced information about cryptocurrencies and web3.",
+        "wallet_response": f"📬 Digital wallet: {WALLET_ADDRESS} (Multi-chain support)",
+        "image_style": "abstract blockchain visualization with interconnected nodes"
     }
 }
+
+@app.route("/test_image")
+def test_image():
+    """Test image generation endpoint"""
+    test_prompts = [
+        "Generate image of a Bitcoin vault",
+        "Create picture of Ethereum blockchain",
+        "Draw me a Solana logo"
+    ]
+    
+    results = []
+    for prompt in test_prompts:
+        image_url = generate_image(prompt, "crypto enthusiast")
+        results.append({
+            "prompt": prompt,
+            "image_url": image_url,
+            "success": bool(image_url)
+        })
+    
+    return jsonify(results)
 
 # Routes
 @app.route("/")
@@ -117,162 +188,277 @@ def set_personality():
         return jsonify({"message": f"Active personality: {personality}"})
         
     except Exception as e:
+        logger.error(f"Personality error: {str(e)}")
         return jsonify({"error": str(e)}), 500
-
-
-# Image Generation Function
-def generate_image(prompt: str) -> str:
-    """Generate image using DALL-E 3"""
+    
+def generate_image(prompt: str, personality: str) -> str:
+    """Generate and resize an image from DALL-E 3."""
     try:
-        response = openai.Image.create(
-            
+        cleaned_prompt = ' '.join([word for word in prompt.split() if word.lower() not in BANNED_WORDS])[:250]
+
+        # Get style with safe fallback
+        personality_config = PERSONALITIES.get(personality, PERSONALITIES["default"])
+        style = personality_config.get("image_style", "digital art")  # Safe access
+
+        # Generate 1024x1024 image (DALL·E 3 only supports this size)
+        response = client.images.generate(
             model="dall-e-3",
-            prompt=f"Professional digital art of {prompt}. Trending crypto-art style, vibrant colors, 8K resolution.",
-            n=1,
+            prompt=f"8K {style} of {cleaned_prompt}. Trending crypto-art style, vibrant colors, blockchain elements, award-winning composition -nft -watermark",
             size="1024x1024",
-            quality="hd",
-            request_timeout=15
-            
+            quality="hd"
         )
-        
-        return response['data'][0]['url']
+
+        # Get the image URL
+        image_url = response.data[0].url
+        logger.info(f"✅ Image generated: {image_url}")
+
+        # Download and resize the image
+        img_response = requests.get(image_url)
+        img = Image.open(BytesIO(img_response.content))
+
+        # Resize to 256x256
+        resized_img = img.resize((256, 256), Image.LANCZOS)
+
+
+        # Save resized image to buffer
+        img_buffer = BytesIO()
+        resized_img.save(img_buffer, format="PNG")
+
+        # Convert to base64 or re-upload if needed
+        return image_url  # Use original or re-upload resized one
+
+    except BadRequestError as e:
+        logger.error(f"❌ Content policy violation: {str(e)}")
+        return None
     except Exception as e:
-        print(f"⚠️ Image error: {str(e)}")
+        logger.error(f"❌ Image generation failed: {str(e)}")
         return None
 
 def get_crypto_prices():
+    """Fetch crypto prices with improved error handling"""
     try:
-        print(f"🔄 Fetching prices for: {list(CRYPTO_IDS.keys())}")
         params = {
             "ids": ",".join(CRYPTO_IDS.keys()),
             "vs_currencies": "usd",
             "include_last_updated_at": True
         }
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept-Encoding": "gzip"
-            }
-        
-        response = requests.get(COINGECKO_URL, headers=headers, params=params, timeout=10)
+        response = requests.get(
+            COINGECKO_URL,
+            headers={"User-Agent": "Mozilla/5.0"},
+            params=params,
+            timeout=8
+        )
         response.raise_for_status()
-        print(f"✅ CoinGecko response: {response.status_code}")
         
-        prices = {}
-        data = response.json()
-        print(f"📄 Raw API data: {data}")  # Debug raw response
+        return {
+            symbol: {
+                "price": f"${data['usd']:,.2f}",
+                "updated": datetime.fromtimestamp(data["last_updated_at"]).strftime("%Y-%m-%d %H:%M UTC")
+            }
+            for crypto, symbol in CRYPTO_IDS.items()
+            if (data := response.json().get(crypto))
+        }
         
-        for crypto, symbol in CRYPTO_IDS.items():
-            if crypto in data:
-                prices[symbol] = {
-                    "price": f"${data[crypto]['usd']:,.2f}",
-                    "updated": datetime.fromtimestamp(data[crypto]["last_updated_at"]).strftime("%Y-%m-%d %H:%M UTC")
-                }
-        print(f"📊 Processed prices: {prices}")
-        return prices
-    
     except Exception as e:
-        print(f"⚠️ Crypto price error: {str(e)}")
+        logger.error(f"Crypto price error: {str(e)}")
         return None
 
 # Updated DeepSeek v2 API Call
 def call_deepseek_v2(prompt: str, personality: str) -> dict:
-    """Handle DeepSeek API calls with enhanced error handling"""
-    prompt_lower = prompt.lower()
-    
-    # 1. Price Check
-    price_keywords = [
-        "price of", "current price", "how much is", "value of",
-        "rate of", "price for", "cost of", "btc price", "eth price",
-        "sol price", "bitcoin value", "ethereum value", "solana value",
-        "market value", "crypto rate", "coin price", "how's crypto",
-        "price check", "valuation"
-    ]
-    
-    if any(kw in prompt_lower for kw in price_keywords):
-        print(f"💰 Price query detected: {prompt}")
-        prices = get_crypto_prices()
-        
-        if prices:
-            # Format response and ensure immediate return
-            response_text = format_price_response(prompt_lower, prices)
-            print(f"✅ Returning price response: {response_text}")
-            return {"text": response_text, "image": None}
-        else:
-            print("⚠️ Price check failed, proceeding to normal flow")
-
-    # 2. Wallet Check
-    wallet_keywords = ["wallet", "address", "ca", "contract address"]
-    if any(kw in prompt_lower for kw in wallet_keywords):
-        print(f"🔑 Wallet query detected: {prompt}")
-        return {
-            "text": PERSONALITIES.get(personality, PERSONALITIES["default"])["wallet_response"],
-            "image": None
-        }
-
-    # 3. DeepSeek API Call
-    print(f"🤖 Proceeding to DeepSeek API call for: {prompt}")
-    headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-        "Content-Type": "application/json",
-        "Accept": "application/vnd.deepseek.v2+json"
-    }
-
-    personality_config = PERSONALITIES.get(personality, PERSONALITIES["default"])
-    
-    payload = {
-        "model": "deepseek-chat",
-        "messages": [
-            {"role": "system", "content": personality_config["system_prompt"]},
-            {"role": "user", "content": prompt},
-        ],
-        "temperature": 0.7,
-        "max_tokens": 1000,
-        "stream": False
-    }
-
+    """Handle DeepSeek API calls with enhanced price checking and error handling"""
     try:
-        print(f"🚀 Sending request to DeepSeek: {payload}")
-        response = requests.post(DEEPSEEK_API_URL, json=payload, headers=headers, timeout=15)
+        prompt_lower = prompt.lower()
+        
+        # Enhanced price check with dual verification
+        price_keywords = ["price", "value", "how much", "current", "rate", "valuation"]
+        crypto_terms = ["bitcoin", "btc", "ethereum", "eth", "solana", "sol", "crypto", "coin"]
+        
+        if any(kw in prompt_lower for kw in price_keywords) and \
+           any(term in prompt_lower for term in crypto_terms):
+            
+            logger.info(f"💰 Crypto price query detected: {prompt}")
+            prices = get_crypto_prices()
+            
+            if prices:
+                return {
+                    "text": format_price_response(prompt_lower, prices),
+                    "image": None
+                }
+            else:
+                # Provide detailed troubleshooting guidance
+                return {
+                    "text": "⚠️ Failed to fetch real-time prices. Please:\n"
+                            "1. Check your internet connection\n"
+                            "2. Visit coinmarketcap.com directly\n"
+                            "3. Try again in 30 seconds\n"
+                            "4. Contact support if issue persists",
+                    "image": None
+                }
+
+        # Enhanced wallet address detection
+        wallet_keywords = ["wallet"]
+        if any(kw in prompt_lower for kw in wallet_keywords):
+            logger.info(f"🔑 Wallet query detected: {prompt}")
+            return {
+                "text": PERSONALITIES.get(personality, PERSONALITIES["default"])["wallet_response"],
+                "image": None
+            }
+
+        # Prepare DeepSeek request with improved security
+        headers = {
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json",
+            "Accept": "application/vnd.deepseek.v2+json",
+            "User-Agent": "CryptoAI/1.0 (+https://yourdomain.com)"
+        }
+        
+        payload = {
+    "model": "deepseek-chat",  # Example alternative model name
+    "messages": [
+        {"role": "system", "content": PERSONALITIES[personality]["system_prompt"]},
+        {"role": "user", "content": prompt},
+    ],
+    "temperature": 0.7,
+    "max_tokens": 1000,
+    "top_p": 0.9,
+    "frequency_penalty": 0.5,
+    "presence_penalty": 0.5
+}
+
+        # Add request signature for security
+        response = requests.post(
+            DEEPSEEK_API_URL,
+            json=payload,
+            headers=headers,
+            timeout=10  # Reduced timeout for better failover
+        )
+        
+        # Validate response structure
         response.raise_for_status()
         response_data = response.json()
-        print(f"✅ DeepSeek response: {response_data}")
         
+        if not isinstance(response_data.get("choices"), list) or len(response_data["choices"]) == 0:
+            raise ValueError("Invalid response structure from DeepSeek API")
+            
         return {
             "text": response_data["choices"][0]["message"]["content"],
             "image": None
         }
         
     except requests.exceptions.HTTPError as e:
-        print(f"🔴 DeepSeek HTTP Error: {response.status_code} - {response.text}")
-        return {"text": "⚠️ Temporary system issue - please try again!", "image": None}
-    except requests.exceptions.RequestException as e:
-        print(f"🔴 Network Error: {str(e)}")
-        return {"text": "⚠️ Connection failed - check your network!", "image": None}
-    except KeyError as e:
-        print(f"🔴 Response Format Error: Missing {str(e)} in API response")
-        return {"text": "⚠️ Unexpected response format from API", "image": None}
+        logger.error(f"DeepSeek API Error {e.response.status_code}: {e.response.text[:200]}")
+        return {
+            "text": "⚠️ System overloaded - please try again in 30 seconds" if e.response.status_code == 429
+            else "⚠️ Temporary service disruption - our engineers are on it!",
+            "image": None
+        }
+        
+    except (requests.Timeout, requests.ConnectionError):
+        logger.error("Network failure during DeepSeek API call")
+        return {
+            "text": "⚠️ Network connection failed - check your internet",
+            "image": None
+        }
+        
+    except Exception as e:
+        logger.error(f"Unexpected error in call_deepseek_v2: {str(e)}", exc_info=True)
+        return {
+            "text": "⚠️ Critical system error - administrators have been notified",
+            "image": None
+        }
+def post_tweet(message: str):
+    try:
+        tweet = twitter_api.update_status(status=message)
+        print(f"Tweet posted successfully: {tweet.id}")
+        return tweet
+    except Exception as e:
+        print(f"Error posting tweet: {str(e)}")
+        return None
 
+# Example usage within a Flask route:
+@app.route("/tweet", methods=["POST"])
+def tweet():
+    data = request.get_json()
+    if not data or "message" not in data:
+        return jsonify({"error": "No message provided"}), 400
+    message = data["message"]
+    tweet = post_tweet(message)
+    if tweet:
+        return jsonify({"message": "Tweet posted successfully", "tweet_id": tweet.id})
+    else:
+        return jsonify({"error": "Tweet failed"}), 500    
+    
+def get_crypto_prices():
+    """Fetch crypto prices with enhanced error handling"""
+    try:
+        logger.info("🔄 Fetching crypto prices from CoinGecko...")
+        params = {
+            "ids": ",".join(CRYPTO_IDS.keys()),
+            "vs_currencies": "usd",
+            "include_last_updated_at": True
+        }
+        
+        response = requests.get(
+            COINGECKO_URL,
+            headers={"User-Agent": "CryptoAI/1.0"},
+            params=params,
+            timeout=8
+        )
+        response.raise_for_status()
+        data = response.json()
+        
+        prices = {}
+        for crypto, symbol in CRYPTO_IDS.items():
+            if crypto in data:
+                # Safe key access with fallbacks
+                price_data = data[crypto]
+                prices[symbol] = {
+                    "price": float(price_data.get("usd", 0)),
+                    "updated": datetime.fromtimestamp(
+                        price_data.get("last_updated_at", datetime.now().timestamp())
+                    ).strftime("%Y-%m-%d %H:%M UTC")
+                }
+        
+        logger.info(f"✅ Successfully fetched prices: {prices}")
+        return prices
+    
+    except Exception as e:
+        logger.error(f"⚠️ Crypto price error: {str(e)}", exc_info=True)
+        return None
+    
 def format_price_response(prompt: str, prices: dict) -> str:
-    """Format cryptocurrency price response with proper symbols"""
-    crypto_map = {
-        "bitcoin": ("₿ Bitcoin", "BTC"),
-        "btc": ("₿ Bitcoin", "BTC"),
-        "ethereum": ("Ξ Ethereum", "ETH"),
-        "eth": ("Ξ Ethereum", "ETH"),
-        "solana": ("◎ Solana", "SOL"),
-        "sol": ("◎ Solana", "SOL")
-    }
+    """Handle price conversions and formatting"""
+    try:
+        # Extract amount and coin
+        amount = next((float(s[1:]) for s in prompt.split() if s.startswith("$")), None)
+        coin = next((term for term in ["eth", "btc", "sol"] if term in prompt), "crypto")
+        
+        # Get conversion rates
+        rates = {
+            "eth": prices.get("ETH", {}).get("price", 0),
+            "btc": prices.get("BTC", {}).get("price", 0),
+            "sol": prices.get("SOL", {}).get("price", 0)
+        }
+        
+        # Build response
+        if amount and rates[coin] > 0:
+            crypto_amount = amount / rates[coin]
+            return (
+                f"💸 For ${amount:.2f} you'd get:\n"
+                f"➖ {crypto_amount:.6f} {coin.upper()}\n"
+                f"📈 Current Rate: ${rates[coin]:,.2f} per {coin.upper()}\n"
+                f"🕒 Updated: {prices[coin.upper()]['updated']}"
+            )
+        
+        # Fallback to basic price info
+        return "\n".join(
+            f"• {sym}: ${data['price']:,.2f} (Updated: {data['updated']})"
+            for sym, data in prices.items()
+        )
     
-    for term, (name, symbol) in crypto_map.items():
-        if term in prompt:
-            return f"{name} price: {prices[symbol]['price']}\n(Updated: {prices[symbol]['updated']})"
-    
-    # General price response
-    update_times = {v['updated'] for v in prices.values()}
-    price_list = "\n".join([f"{name}: {data['price']}" for name, data in prices.items()])
-    time_note = f"\n(Updated: {next(iter(update_times))})" if len(update_times) == 1 else "\n(Update times vary per crypto)"
-    
-    return f"📊 Current crypto prices:\n{price_list}{time_note}"
+    except Exception as e:
+        logger.error(f"Price formatting error: {str(e)}", exc_info=True)
+        return "⚠️ Error calculating prices - check coinmarketcap.com for live rates"
 
 @app.route("/test_prices")
 def test_prices():
@@ -295,40 +481,55 @@ def test_prices():
         })
     
     return jsonify(results)    
-
-@app.before_request
-def force_https():
-    if not request.is_secure:
-        return redirect(request.url.replace("http://", "https://"), code=301)    
     
 @app.route('/favicon.ico')
 def favicon():
     return send_from_directory(os.path.join(app.root_path, 'static'), 'favicon.ico', mimetype='image/vnd.microsoft.icon')
 
-# Update route handler
 @app.route("/chat", methods=["POST"])
 def chat():
     try:
         data = request.get_json()
         if not data or "message" not in data:
-            return jsonify({"error": "No message"}), 400
-        
+            return jsonify({"error": "No message provided"}), 400
+
+        # Retrieve the personality (default if none is set)
         personality = session.get("personality", "default")
-        result = call_deepseek_v2(data["message"], personality)  # Updated function name
-        
-        # Add image generation check
-        if any(trigger in data["message"].lower() for trigger in IMAGE_TRIGGERS):
-            image_url = generate_image(data["message"])
-            result["image"] = image_url
-        
+        user_message = data["message"].lower()
+
+        # Check if the incoming JSON includes a flag to tweet the response
+        # This flag should be set on the client-side; e.g., {"message": "Tell me a crypto joke", "tweet": true}
+        tweet_flag = data.get("tweet", False)
+
+        # Handle image requests first if the message contains image triggers
+        if any(trigger in user_message for trigger in IMAGE_TRIGGERS):
+            image_url = generate_image(data["message"], personality)
+            response_text = "🔮 Generated image for your request:" if image_url else "⚠️ Image generation failed"
+            # Only auto-tweet if the tweet flag is True
+            if tweet_flag:
+                post_tweet(response_text)
+            return jsonify({
+                "response": response_text,
+                "image": image_url,
+                "personality": personality
+            })
+
+        # Process a normal chat response via DeepSeek
+        result = call_deepseek_v2(data["message"], personality)
+        # Make sure the tweet does not exceed Twitter's 280-character limit
+        tweet_text = result["text"][:280]
+        if tweet_flag:
+            post_tweet(tweet_text)
+
         return jsonify({
             "response": result["text"],
             "image": result["image"],
             "personality": personality
         })
-        
+
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Chat error: {str(e)}", exc_info=True)
+        return jsonify({"error": "Internal server error"}), 500
     
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)  # Ensure debug is False
+    app.run(host="0.0.0.0", port=5001, debug=False)  # Ensure debug is False
