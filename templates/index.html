@@ -4,76 +4,168 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
-    <title>$DP</title>  <!-- Updated name -->
+    <title>$DP Terminal</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-    <div class="terminal">
-        <h2>🟢 $DP Terminal</h2>  <!-- Updated name -->
-        <p>Select a Personality:</p>
+    
+    <!-- Header -->
+    <header>
+        <div class="header-content">
+            <img src="https://i.ibb.co/XxbwWkMG/434x0w-removebg-preview.png" alt="Logo" class="header-logo">
+            <h1 class="header-title">DEEP-PERSONA</h1>
+        </div>
+        <nav>
+            <a href="https://deeppersona.godsent.cx/">Home</a>
+            <a href="https://api-docs.deepseek.com/">DeepSeek</a>
+            <a href="https://pump.fun/board">$DP Token</a>
+            <a href="https://github.com/godsentalpha/">GitHub</a>
+        </nav>
+    </header>
 
-        <select id="personality">
-            <option value="">Choose a Personality</option>
-        </select>
-        
-        <button onclick="setPersonality()">Set Personality</button>
+    <!-- Main Layout -->
+    <div class="container">
+        <!-- Left Side: Terminal -->
+        <main class="terminal">
+            <h2 class="terminal-title">DΞΞPPΞRSONΛ // SYS-KΞRNΞL <span class="glitch-text">[ACTIVE]</span></h2>
+            <p id="active-personality" class="hidden"></p>
+            <div class="personality-selection">
+                <label for="personality">Select a Personality:</label>
+                <label>
+                    <input type="checkbox" id="tweetCheckbox">
+                    Auto-tweet my message
+                </label>
+                <div class="dropdown-container">
+                    <select id="personality">
+                        <option value="">Choose a Personality</option>
+                    </select>
+                    <button onclick="setPersonality()">Set</button>
+                </div>
+            </div>
+            <div id="messages"></div>
+            <div class="chat-input">
+                <input type="text" id="userInput" class="blinking-cursor" placeholder="Type your message..." onkeydown="if(event.key==='Enter') sendMessage()">
+            </div>
+        </main>
 
-        <div id="messages"></div>
-
-        <input type="text" id="userInput" class="blinking-cursor" placeholder="Type your message..." onkeydown="if(event.key==='Enter') sendMessage()">
-
+        <!-- Right Side: Modules -->
+<aside class="module-container">
+    <h2 class="terminal-title">Alpha Automation</h2>
+    <div class="module-grid">
+        <div class="module" id="godlike">
+            <a href="https://godsent.cx" target="_blank">GODLIKE</a>
+        </div>
+        <div class="module" id="godlike">
+            <a href="https://sniper.godsent.cx" target="_blank">SNIPER</a>
+        </div>
     </div>
+    <div class="module chat-module" id="chatModule">
+        <pre id="init-sequence"></pre>
+    </div>
+</aside>
+    </div>
+
+    <!-- Footer -->
+    <footer>
+        <p>&copy; @GODSENTALPHA 2025. All Rights Reserved. | <a href="https://x.com/deeppersonaR1">X</a></p>
+    </footer>
+
 
     <script>
         let selectedPersonality = "";
-
-        // Load personality list dynamically
-                // Load personality list dynamically
-                const PERSONALITIES = [
-    "hacker", "scientist", "philosopher", "comedian", "wizard", "robot",
-    "pirate", "detective", "superhero", "villain", "gamer", "alien",
-    "crypto enthusiast"
-];
-
         const personalityDropdown = document.getElementById("personality");
+        const activePersonality = document.getElementById("active-personality");
+        const PERSONALITIES = ["hacker", "scientist", "philosopher", "comedian", "wizard", "robot", "pirate", "detective", "superhero", "villain", "gamer", "alien", "crypto enthusiast"];
+    
         PERSONALITIES.forEach(personality => {
             const option = document.createElement("option");
             option.value = personality;
             option.textContent = personality.charAt(0).toUpperCase() + personality.slice(1);
             personalityDropdown.appendChild(option);
         });
-
+    
+        document.addEventListener("DOMContentLoaded", function () {
+            const initText = [
+                "[DeepSeekR1] Initializing DeepSeekR1 Model deepseek-chat...",
+                "[PID: 4019] Allocating memory...",
+                "[KERNEL] Connecting to DeepSeek Engine...",
+                "[SYSTEM] Loading modules...",
+                "[AUTH] Validating OpenAI SDK handshake...",
+                "[AI] Booting deepseekv2_call...",
+                "[LOADER] Synchronizing data stream...",
+            ];
+    
+            let index = 0;
+            const initSequence = document.getElementById("init-sequence");
+    
+            function typeEffect() {
+                if (index < initText.length) {
+                    initSequence.innerHTML += `<span class="cmd-line">${initText[index]}</span><br>`;
+                    index++;
+                    setTimeout(typeEffect, 800);
+                } else {
+                    let progressBar = document.createElement("div");
+                    progressBar.classList.add("progress-bar");
+                    initSequence.appendChild(progressBar);
+    
+                    let width = 0;
+                    let interval = setInterval(() => {
+                        width += 10;
+                        progressBar.style.width = width + "%";
+                        progressBar.innerText = width + "%";
+    
+                        if (width >= 100) {
+                            clearInterval(interval);
+                            setTimeout(() => {
+                                initSequence.innerHTML += `<br><span class="cmd-line">[✔] ✅ All systems connected 🐋</span>`;
+                            }, 500);
+                        }
+                    }, 300);
+                }
+            }
+    
+            typeEffect();
+        });
+    
         function setPersonality() {
             selectedPersonality = document.getElementById("personality").value;
             if (!selectedPersonality) {
                 alert("⚠️ Please select a personality first!");
                 return;
             }
-
             fetch("/set_personality", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 credentials: "include",
                 body: JSON.stringify({ personality: selectedPersonality }),
-            }).then(response => response.json())
+            })
+            .then(response => response.json())
             .then(data => {
-                document.getElementById("messages").innerHTML += `<p class="system">🎭 ${data.message}</p>`;
-            }).catch(err => console.error("Error setting personality:", err));
+                activePersonality.innerHTML = `🎭 Active personality: ${selectedPersonality}`;
+                activePersonality.classList.remove("hidden");
+            })
+            .catch(err => console.error("Error setting personality:", err));
         }
-
+    
         function sendMessage() {
             const inputField = document.getElementById("userInput");
             const message = inputField.value.trim();
             if (!message) return;
-
+    
+            // Display user's message
             document.getElementById("messages").innerHTML += `<p class="user">User: ${message}</p>`;
             inputField.value = "";
-
+    
+            // Check if auto-tweet is enabled via the checkbox
+            const tweetCheckbox = document.getElementById("tweetCheckbox");
+            const tweetFlag = tweetCheckbox ? tweetCheckbox.checked : false;
+    
             fetch("/chat", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 credentials: "include",
-                body: JSON.stringify({ message }),
+                // Pass the tweet flag along with the message
+                body: JSON.stringify({ message, tweet: tweetFlag }),
             })
             .then(response => response.json())
             .then(data => {
@@ -87,5 +179,6 @@
             .catch(err => console.error("Chat Error:", err));
         }
     </script>
+    
 </body>
 </html>
